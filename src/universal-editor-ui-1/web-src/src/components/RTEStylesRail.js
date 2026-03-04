@@ -58,7 +58,7 @@ export default function RTEStylesRail () {
    */
   const buildRteStylesCssUrl = (state) => {
     const ref = getRefFromEditorState(state);
-    return `https://${ref}--${EDS_GITHUB_REPO}--${EDS_GITHUB_ORG}.aem.page${RTE_STYLES_CSS_PATH}`;
+    return `https://${ref}--${EDS_GITHUB_REPO}--${EDS_GITHUB_ORG}.aem.live${RTE_STYLES_CSS_PATH}`;
   };
 
   const updateRichtextWithGuest = async (editable) => {
