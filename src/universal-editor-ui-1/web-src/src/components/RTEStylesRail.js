@@ -6,14 +6,10 @@ import React, { useState, useEffect } from 'react'
 import { attach } from "@adobe/uix-guest"
 import {
   Flex,
-  Form,
-  ProgressCircle,
   Provider,
   Content,
   defaultTheme,
   Text,
-  TextField,
-  ButtonGroup,
   Button,
   Heading,
   ComboBox,
@@ -21,32 +17,48 @@ import {
   View
 } from '@adobe/react-spectrum'
 
-import { extensionId, UNIVERSAL_EDITOR_CONFIG_SPREADSHEET, RTE_STYLES_URL, 
-  BROADCAST_CHANNEL_NAME, EVENT_AUE_UI_SELECT, EVENT_AUE_UI_UPDATE} from "./Constants";
+import {
+  extensionId,
+  EDS_GITHUB_ORG,
+  EDS_GITHUB_REPO,
+  RTE_STYLES_CSS_PATH,
+  BROADCAST_CHANNEL_NAME,
+  EVENT_AUE_UI_SELECT,
+  EVENT_AUE_UI_UPDATE
+} from "./Constants";
 
 export default function RTEStylesRail () {
   // Fields
   const [guestConnection, setGuestConnection] = useState();
-    const [editorState, setEditorState] = useState(null);
+  const [editorState, setEditorState] = useState(null);
   const [richtextItem, setRichtextItem] = useState({});
   const [textValue, setTextValue] = useState("");
   const [rteStyles, setRteStyles] = useState([]);
   const [selectedStyle, setSelectedStyle] = useState("");
   const [markedText, setMarkedText] = useState("");
 
-  const getAemHost = (editorState) => {
-    return editorState.connections.aemconnection.substring(
-      editorState.connections.aemconnection.indexOf("xwalk:") + 6
-    );
+  /**
+   * Extract the branch/ref from the editorState location URL.
+   * The UE URL has ?ref=branchname in the query params.
+   */
+  const getRefFromEditorState = (state) => {
+    try {
+      const url = new URL(state.location);
+      return url.searchParams.get('ref') || 'main';
+    } catch (e) {
+      console.error("Error extracting ref from editorState:", e);
+      return 'main';
+    }
   };
 
-  const getSiteRoot = (editorState) => {
-    const url = new URL(editorState.location);
-
-    // Extract root something like /content/site-name
-    const match = url.pathname.match(/^(\/content\/[^\/]+)/);
-    
-    return match ? match[1] : '';
+  /**
+   * Build the EDS aem.page URL for the RTE styles CSS file.
+   * Pattern: https://{ref}--{repo}--{org}.aem.page{cssPath}
+   * This URL has permissive CORS headers — no auth needed.
+   */
+  const buildRteStylesCssUrl = (state) => {
+    const ref = getRefFromEditorState(state);
+    return `https://${ref}--${EDS_GITHUB_REPO}--${EDS_GITHUB_ORG}.aem.page${RTE_STYLES_CSS_PATH}`;
   };
 
   const updateRichtextWithGuest = async (editable) => {
@@ -123,40 +135,18 @@ export default function RTEStylesRail () {
     return match ? match[1].trim() : "";
   };
 
-  const loadUniversalEditorConfig = async (siteRoot, aemHost, aemToken) => {
-    try {
-      const requestOptions = {
-        headers: {
-          'Authorization': `Bearer ${aemToken}`
-        }
-      };
-
-      const response = await fetch(
-        `${aemHost}/bin/querybuilder.json?path=${siteRoot}/${UNIVERSAL_EDITOR_CONFIG_SPREADSHEET}` +
-        `&property=Key&property.value=${RTE_STYLES_URL}` +
-        `&p.hits=selective&p.properties=Key Value`, requestOptions
-      );
-
-      const data = await response.json();
-      const config = {};
-
-      data.hits.forEach(hit => {
-        if (hit.Key && hit.Value) {
-          config[hit.Key] = hit.Value;
-        }
-      });
-      
-      return config;
-    } catch (error) {
-      console.error("Error loading Universal Editor config:", error);
-      return {};
-    }
-  };
-
   const loadRTEStyles = async (stylesUrl) => {
     try {
+      console.log("loadRTEStyles: fetching CSS from", stylesUrl);
       const response = await fetch(stylesUrl);
+
+      if (!response.ok) {
+        console.error("loadRTEStyles: failed to fetch CSS, status:", response.status);
+        return [];
+      }
+
       const cssText = await response.text();
+      console.log("loadRTEStyles: CSS loaded, length:", cssText.length);
 
       // Extract class names from CSS using regex, Pattern: .classname { ... }
       const classNameRegex = /\.([a-zA-Z0-9_-]+)\s*\{/g;
@@ -167,6 +157,7 @@ export default function RTEStylesRail () {
         matches.push(match[1]);
       }
 
+      console.log("loadRTEStyles: found styles:", matches);
       setRteStyles(matches);
       return matches;
     } catch (error) {
@@ -183,10 +174,11 @@ export default function RTEStylesRail () {
       let state = await connection.host.editorState.get();
       setEditorState(state);
 
-      const ueConfig = await loadUniversalEditorConfig(getSiteRoot(state), getAemHost(state), 
-                        await connection.sharedContext.get("token"));
+      // Build the CSS URL from editorState (uses EDS aem.page — no CORS issues)
+      const cssUrl = buildRteStylesCssUrl(state);
+      console.log("RTEStylesRail: loading RTE styles from:", cssUrl);
 
-      await loadRTEStyles(ueConfig[RTE_STYLES_URL]);
+      await loadRTEStyles(cssUrl);
 
       const channel = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
 
@@ -200,7 +192,7 @@ export default function RTEStylesRail () {
           setEditorState(state);
 
           const resource = event.data.type === EVENT_AUE_UI_SELECT ? event.data.data.resource : event.data.data.request.target.resource;
-          const item = state.editables.filter( (editableItem) => editableItem.resource === resource)[0];
+          let item = state.editables.filter( (editableItem) => editableItem.resource === resource)[0];
 
           if (item) {
             if (!item.content && item.children && item.children.length > 0) {
