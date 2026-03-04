@@ -1,0 +1,12 @@
+{
+  "name": "wp-custpm-rte-styles",
+  "id": "wp-custpm-rte-styles",
+  "description": "For creating custom rte styles",
+  "version": "0.0.1",
+  "rightPanelRails": [
+    {
+      "header": "RTE Styles",
+      "id": "rte-styles"
+    }
+  ]
+}
