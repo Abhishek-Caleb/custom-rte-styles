@@ -52,13 +52,20 @@ export default function RTEStylesRail () {
   };
 
   /**
-   * Build the EDS aem.page URL for the RTE styles CSS file.
-   * Pattern: https://{ref}--{repo}--{org}.aem.page{cssPath}
-   * This URL has permissive CORS headers — no auth needed.
+   * Build the URL for the AIO Runtime action that proxies the CSS fetch.
+   * This avoids CORS issues since the action runs server-side.
    */
-  const buildRteStylesCssUrl = (state) => {
+  const buildActionUrl = (state) => {
     const ref = getRefFromEditorState(state);
-    return `https://${ref}--${EDS_GITHUB_REPO}--${EDS_GITHUB_ORG}.aem.live${RTE_STYLES_CSS_PATH}`;
+    // The action URL is relative to the AIO app's deployed origin
+    // AIO Runtime actions are accessible at /api/v1/web/<package>/<action>
+    const params = new URLSearchParams({
+      ref,
+      org: EDS_GITHUB_ORG,
+      repo: EDS_GITHUB_REPO,
+      path: RTE_STYLES_CSS_PATH,
+    });
+    return `/api/v1/web/custom-rte-styles/fetch-rte-styles?${params.toString()}`;
   };
 
   const updateRichtextWithGuest = async (editable) => {
@@ -137,7 +144,7 @@ export default function RTEStylesRail () {
 
   const loadRTEStyles = async (stylesUrl) => {
     try {
-      console.log("loadRTEStyles: fetching CSS from", stylesUrl);
+      console.log("loadRTEStyles: fetching CSS from action URL:", stylesUrl);
       const response = await fetch(stylesUrl);
 
       if (!response.ok) {
@@ -174,11 +181,11 @@ export default function RTEStylesRail () {
       let state = await connection.host.editorState.get();
       setEditorState(state);
 
-      // Build the CSS URL from editorState (uses EDS aem.page — no CORS issues)
-      const cssUrl = buildRteStylesCssUrl(state);
-      console.log("RTEStylesRail: loading RTE styles from:", cssUrl);
+      // Use the AIO Runtime action to fetch CSS (avoids CORS)
+      const actionUrl = buildActionUrl(state);
+      console.log("RTEStylesRail: loading RTE styles via action:", actionUrl);
 
-      await loadRTEStyles(cssUrl);
+      await loadRTEStyles(actionUrl);
 
       const channel = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
 
