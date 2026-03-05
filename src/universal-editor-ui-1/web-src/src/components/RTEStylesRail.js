@@ -14,9 +14,7 @@ import {
   Heading,
   ComboBox,
   Item,
-  View,
-  Divider,
-  Badge
+  View
 } from '@adobe/react-spectrum'
 
 import {
@@ -26,8 +24,7 @@ import {
   RTE_STYLES_CSS_PATH,
   BROADCAST_CHANNEL_NAME,
   EVENT_AUE_UI_SELECT,
-  EVENT_AUE_UI_UPDATE,
-  EVENT_RTE_TEXT_SELECTION
+  EVENT_AUE_UI_UPDATE
 } from "./Constants";
 
 export default function RTEStylesRail () {
@@ -38,10 +35,11 @@ export default function RTEStylesRail () {
   const [textValue, setTextValue] = useState("");
   const [rteStyles, setRteStyles] = useState([]);
   const [selectedStyle, setSelectedStyle] = useState("");
-  const [selectedText, setSelectedText] = useState("");
+  const [markedText, setMarkedText] = useState("");
 
   /**
    * Extract the branch/ref from the editorState location URL.
+   * The UE URL has ?ref=branchname in the query params.
    */
   const getRefFromEditorState = (state) => {
     try {
@@ -55,9 +53,12 @@ export default function RTEStylesRail () {
 
   /**
    * Build the URL for the AIO Runtime action that proxies the CSS fetch.
+   * This avoids CORS issues since the action runs server-side.
    */
   const buildActionUrl = (state) => {
     const ref = getRefFromEditorState(state);
+    // The action URL is relative to the AIO app's deployed origin
+    // AIO Runtime actions are accessible at /api/v1/web/<package>/<action>
     const params = new URLSearchParams({
       ref,
       org: EDS_GITHUB_ORG,
@@ -81,43 +82,20 @@ export default function RTEStylesRail () {
     await guestConnection.host.editorActions.update( { target, patch });
   }
 
-  /**
-   * When author selects a style from the dropdown, wrap the selected text
-   * with <span class="styleName">selectedText</span> in the HTML content.
-   *
-   * If the text is already styled, the existing span is replaced with the new style.
-   */
   const handleSelectionChange = async (styleName) => {
-    if (!selectedText || !styleName) return;
-
+    if(!markedText)  return;
+    
     setSelectedStyle(styleName);
-
+    
     let updatedTextValue = textValue;
 
-    if (selectedText && textValue) {
-      const escapedSelectedText = selectedText.replaceAll(
-        /[.*+?^${}()|[\]\\]/g, String.raw`\$&`
-      );
-
-      // Check if text is already wrapped in a styled span — if so, replace the class
-      const alreadyStyledPattern = new RegExp(
-        String.raw`<span\s+class="[^"]*">` + escapedSelectedText + String.raw`</span>`
-      );
-
-      if (alreadyStyledPattern.test(updatedTextValue)) {
-        // Replace existing style with new style
-        updatedTextValue = updatedTextValue.replace(
-          alreadyStyledPattern,
-          `<span class="${styleName}">${selectedText}</span>`
-        );
-      } else {
-        // Wrap the first plain occurrence with a styled span
-        updatedTextValue = updatedTextValue.replace(
-          selectedText,
-          `<span class="${styleName}">${selectedText}</span>`
-        );
-      }
-
+    if (markedText && textValue) {
+      // Replace //markedText// with //[styleName] markedText//
+      const escapedMarkedText = markedText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const oldPattern = new RegExp(`(?<!:)\/\/${escapedMarkedText}\/\/`, 'g');
+      const newPattern = `//[${styleName}] ${markedText}//`;
+      
+      updatedTextValue = textValue.replace(oldPattern, newPattern);
       setTextValue(updatedTextValue);
     }
 
@@ -127,53 +105,8 @@ export default function RTEStylesRail () {
     };
 
     await updateRichtextWithGuest(updatedItem);
+
     await guestConnection.host.editorActions.refreshPage();
-
-    // Clear selection after applying
-    setSelectedText("");
-    setSelectedStyle("");
-  };
-
-  /**
-   * Remove styling from the selected text — unwrap it from its <span>.
-   */
-  const handleRemoveStyle = async () => {
-    if (!selectedText || !textValue) return;
-
-    const escapedSelectedText = selectedText.replaceAll(
-      /[.*+?^${}()|[\]\\]/g, String.raw`\$&`
-    );
-
-    // Find <span class="anything">selectedText</span> and replace with just selectedText
-    const styledPattern = new RegExp(
-      String.raw`<span\s+class="[^"]*">` + escapedSelectedText + String.raw`</span>`, 'g'
-    );
-
-    const updatedTextValue = textValue.replace(styledPattern, selectedText);
-    setTextValue(updatedTextValue);
-
-    const updatedItem = {
-      ...richtextItem,
-      content: updatedTextValue
-    };
-
-    await updateRichtextWithGuest(updatedItem);
-    await guestConnection.host.editorActions.refreshPage();
-
-    setSelectedText("");
-    setSelectedStyle("");
-  };
-
-  /**
-   * Check if the selected text already has a style applied.
-   * Returns the class name if styled, or empty string if not.
-   */
-  const getExistingStyle = (content, text) => {
-    if (!content || !text) return "";
-    const escapedText = text.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
-    const pattern = new RegExp(String.raw`<span\s+class="([^"]*)">`+ escapedText + String.raw`</span>`);
-    const match = content.match(pattern);
-    return match ? match[1] : "";
   };
 
   const handleShowStyled = async () => {
@@ -186,6 +119,27 @@ export default function RTEStylesRail () {
     const url = new URL(editorState.location);
     url.searchParams.set('wpRTEShowStyled', 'false');
     await guestConnection.host.editorActions.navigateTo(url.toString())
+  };
+
+  const convertSpanToMarkedText = (content) => {
+    if (!content) return content;
+
+    // Pattern: <span class="classname">text</span> to //[classname]text//
+    const pattern = /<span class="([^"]+)">([^<]+)<\/span>/g;
+    
+    const converted = content.replace(pattern, '//[$1]$2//');
+    
+    return converted;
+  };
+
+  const extractMarkedText = (content) => {
+    if (!content) return "";
+
+    // Match //text// but NOT //[classname] text// ( ignore already styled text)
+    const pattern = /(?<!:)\/\/(?!\[)([^\/]+?)\/\//;
+    const match = content.match(pattern);
+
+    return match ? match[1].trim() : "";
   };
 
   const loadRTEStyles = async (stylesUrl) => {
@@ -201,6 +155,7 @@ export default function RTEStylesRail () {
       const cssText = await response.text();
       console.log("loadRTEStyles: CSS loaded, length:", cssText.length);
 
+      // Extract class names from CSS using regex, Pattern: .classname { ... }
       const classNameRegex = /\.([a-zA-Z0-9_-]+)\s*\{/g;
       const matches = [];
       let match;
@@ -218,125 +173,73 @@ export default function RTEStylesRail () {
     }
   };
 
-  /**
-   * Given a list of editables and a selected item, resolve to the
-   * richtext editable (which may be a child of a custom block).
-   */
-  const findEditableTarget = (editables, item) => {
-    if (item.content || !item.children || item.children.length === 0) {
-      return item;
-    }
-    const child = editables.find((e) => e.id === item.children[0]);
-    if (child) {
-      child.resource = item.resource;
-      return child;
-    }
-    return item;
-  };
+  useEffect(() => {
+    (async () => {
+      const connection = await attach({ id: extensionId });
+      setGuestConnection(connection);
 
-  const initExtension = async () => {
-    const connection = await attach({ id: extensionId });
-    setGuestConnection(connection);
-
-    let state = await connection.host.editorState.get();
-    setEditorState(state);
-
-    const actionUrl = buildActionUrl(state);
-    console.log("RTEStylesRail: loading RTE styles via action:", actionUrl);
-    await loadRTEStyles(actionUrl);
-
-    const channel = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
-
-    channel.onmessage = async (event) => {
-      if (!event.data.type) return;
-
-      if (event.data.type === EVENT_RTE_TEXT_SELECTION) {
-        const selection = event.data.data?.selectedText || "";
-        console.log("RTEStylesRail: text selection received:", selection);
-        setSelectedText(selection.trim());
-        return;
-      }
-
-      if (event.data.type !== EVENT_AUE_UI_SELECT && event.data.type !== EVENT_AUE_UI_UPDATE) return;
-
-      state = await connection.host.editorState.get();
+      let state = await connection.host.editorState.get();
       setEditorState(state);
 
-      const resource = event.data.type === EVENT_AUE_UI_SELECT
-        ? event.data.data.resource
-        : event.data.data.request.target.resource;
+      // Use the AIO Runtime action to fetch CSS (avoids CORS)
+      const actionUrl = buildActionUrl(state);
+      console.log("RTEStylesRail: loading RTE styles via action:", actionUrl);
 
-      const item = state.editables.find((e) => e.resource === resource);
-      if (!item) return;
+      await loadRTEStyles(actionUrl);
 
-      const target = findEditableTarget(state.editables, item);
-      setRichtextItem(target);
-      setTextValue(target.content || "");
-      setSelectedText("");
-      setSelectedStyle("");
-    };
-  };
+      const channel = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
 
-  useEffect(() => {
-    initExtension().catch(console.error);
+      channel.onmessage = async (event) => {
+        if (!event.data.type) {
+          return;
+        }
+
+        if (event.data.type === EVENT_AUE_UI_SELECT || event.data.type === EVENT_AUE_UI_UPDATE) {
+          state = await connection.host.editorState.get();
+          setEditorState(state);
+
+          const resource = event.data.type === EVENT_AUE_UI_SELECT ? event.data.data.resource : event.data.data.request.target.resource;
+          let item = state.editables.filter( (editableItem) => editableItem.resource === resource)[0];
+
+          if (item) {
+            if (!item.content && item.children && item.children.length > 0) {
+              //for custom blocks "richtext" is child of the custom block
+              let child = state.editables.filter(
+                (editableItem) => editableItem.id === item.children[0]
+              )[0];
+              child.resource = item.resource;
+              item = child;
+            }
+
+            const convertedContent = convertSpanToMarkedText(item.content || "");
+            setRichtextItem(item);
+            setTextValue(convertedContent);
+            setMarkedText(extractMarkedText(convertedContent));
+          }
+        }
+
+        return () => {
+          channel.close();
+        };
+      };
+    })();
   }, []);
-
-  const existingStyle = getExistingStyle(textValue, selectedText);
 
   return (
     <Provider theme={defaultTheme} colorScheme="dark" height="100vh">
       <Content height="100%">
         <View padding="size-200">
-          <Heading marginBottom="size-100" level="3">Selected Text</Heading>
-          <View
-            backgroundColor="gray-800"
-            padding="size-150"
-            borderRadius="regular"
-            borderWidth="thin"
-            borderColor={selectedText ? "blue-400" : "gray-600"}
-            minHeight="size-500"
-          >
-            <Text UNSAFE_style={{ fontStyle: selectedText ? 'normal' : 'italic' }}>
-              {selectedText || "Select some text in the editor to style it"}
-            </Text>
-          </View>
-
-          {existingStyle && (
-            <View marginTop="size-100">
-              <Badge variant="info">Currently styled: {existingStyle}</Badge>
-            </View>
-          )}
-
-          <Heading marginTop="size-300" marginBottom="size-100" level="3">Apply Style</Heading>
-          <ComboBox
-            selectedKey={selectedStyle}
-            onSelectionChange={handleSelectionChange}
-            width="100%"
-            placeholder="Select a style to apply"
-            marginTop="size-200"
-            isDisabled={!selectedText}
-          >
+          <Heading marginBottom="size-100" level="3">Marked Text</Heading>
+          <Text UNSAFE_style={{ fontStyle: markedText ? 'normal' : 'italic' }}>
+            {markedText || "No marked text found, add using pattern // eg. //This is marked text//"}
+          </Text>
+          <Heading marginTop="size-300" marginBottom="size-100" level="3">Available Styles</Heading>
+          <ComboBox selectedKey={selectedStyle} onSelectionChange={handleSelectionChange} width="100%" placeholder="Select Style" marginTop="size-200">
             {rteStyles.map((styleName) => (
               <Item key={styleName}>{styleName}</Item>
             ))}
           </ComboBox>
-
-          {existingStyle && (
-            <Button
-              variant="negative"
-              style="outline"
-              onPress={handleRemoveStyle}
-              marginTop="size-200"
-              width="100%"
-              isDisabled={!selectedText}
-            >
-              Remove Style
-            </Button>
-          )}
-
-          <Divider size="M" marginTop="size-400" marginBottom="size-200" />
-
-          <Flex direction="row" gap="size-100">
+          <Flex direction="row" gap="size-100" marginTop="size-500">
             <Button variant="secondary" onPress={handleShowMarked} flex={1}>Show Marked</Button>
             <Button variant="secondary" onPress={handleShowStyled} flex={1}>Show Styled</Button>
           </Flex>
